@@ -1,0 +1,79 @@
+# Fleet Agent Policy — VM system monitoring and network flow logs
+# Export from Kibana: Fleet → Agent policies → Export
+
+id: sre-assessment-infrastructure-policy
+name: SRE Assessment - Infrastructure Monitoring
+namespace: default
+description: VM system metrics, syslog, and network/firewall flow logs
+is_default: false
+monitoring_enabled:
+  - logs
+  - metrics
+
+inputs:
+  - type: system/metrics
+    enabled: true
+    streams:
+      - id: system-metrics
+        enabled: true
+        data_stream:
+          dataset: system.cpu
+        metricsets:
+          - cpu
+          - load
+          - memory
+          - network
+          - diskio
+          - filesystem
+          - process
+          - process_summary
+        period: 10s
+        processors:
+          - add_fields:
+              target: labels
+              fields:
+                environment: assessment
+                monitoring.tier: infrastructure
+
+  - type: filestream
+    enabled: true
+    streams:
+      - id: system-syslog
+        enabled: true
+        data_stream:
+          dataset: system.syslog
+        paths:
+          - /var/log/syslog
+          - /var/log/auth.log
+
+      - id: calico-flow-logs
+        enabled: true
+        data_stream:
+          dataset: network.flow
+        paths:
+          - /var/log/calico/flowlogs/flows.log
+        parsers:
+          - ndjson:
+              target: ""
+
+      - id: k8s-audit-logs
+        enabled: true
+        data_stream:
+          dataset: kubernetes.audit
+        paths:
+          - /var/log/kubernetes/audit/audit.log
+        processors:
+          - decode_json_fields:
+              fields: ["message"]
+              target: "kubernetes.audit"
+          - drop_event:
+              when:
+                not:
+                  equals:
+                    kubernetes.audit.objectRef.resource: "networkpolicies"
+
+  - type: gcp/firewall
+    enabled: true
+    project_id: "${GCP_PROJECT_ID}"
+    subscription_name: "firewall-logs-sub"
+    period: 60s
