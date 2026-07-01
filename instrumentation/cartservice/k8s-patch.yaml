@@ -1,0 +1,34 @@
+# Kubernetes deployment patch for cartservice OTel environment variables
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cartservice
+  namespace: boutique
+spec:
+  template:
+    spec:
+      containers:
+        - name: server
+          env:
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(HOST_IP):4317"
+            - name: OTEL_SERVICE_NAME
+              value: cartservice
+            - name: OTEL_SERVICE_VERSION
+              value: "v0.3.9"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "deployment.environment=assessment"
+            - name: OTEL_DOTNET_AUTO_TRACES_ENABLED
+              value: "true"
+            - name: OTEL_DOTNET_AUTO_METRICS_ENABLED
+              value: "true"
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_METRICS_EXPORTER
+              value: otlp
+            - name: OTEL_PROPAGATORS
+              value: tracecontext,baggage

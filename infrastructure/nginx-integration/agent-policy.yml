@@ -1,0 +1,55 @@
+# NGINX Ingress Controller Monitoring
+# Collects metrics via Prometheus scrape and access logs via Filebeat
+
+inputs:
+  # Prometheus metrics from NGINX Ingress Controller /metrics endpoint
+  - type: prometheus/metrics
+    enabled: true
+    hosts:
+      - "http://ingress-nginx-controller.ingress-nginx.svc.cluster.local:10254/metrics"
+    period: 15s
+    metrics_path: /metrics
+    data_stream:
+      namespace: default
+    processors:
+      - add_fields:
+          target: labels
+          fields:
+            component: nginx-ingress
+
+  # NGINX access logs (JSON format)
+  - type: filestream
+    enabled: true
+    streams:
+      - id: nginx-access
+        enabled: true
+        data_stream:
+          dataset: nginx.access
+        paths:
+          - /var/log/nginx/access.log
+        parsers:
+          - ndjson:
+              target: ""
+              overwrite_keys: true
+        processors:
+          - rename:
+              fields:
+                - from: "status"
+                  to: "http.response.status_code"
+                - from: "request_time"
+                  to: "nginx.access.request_time"
+                - from: "upstream_response_time"
+                  to: "nginx.access.upstream_response_time"
+
+# NGINX Ingress Controller ConfigMap additions:
+#   log-format-escape-json: "true"
+#   log-format-upstream: >
+#     {"time":"$time_iso8601","remote_addr":"$remote_addr",
+#      "method":"$request_method","uri":"$uri","status":$status,
+#      "request_time":$request_time,"upstream_response_time":"$upstream_response_time",
+#      "upstream_addr":"$upstream_addr","body_bytes_sent":$body_bytes_sent,
+#      "http_referer":"$http_referer","http_user_agent":"$http_user_agent",
+#      "host":"$host","request_id":"$req_id"}
+
+# Alternative: OTel Collector Prometheus receiver scraping /metrics
+# (configured in otel-collector if preferred over Elastic Agent)

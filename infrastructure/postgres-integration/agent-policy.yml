@@ -1,0 +1,46 @@
+# PostgreSQL Integration — Elastic Agent
+# Deploy via Fleet policy or standalone Metricbeat module
+
+inputs:
+  - type: postgresql/metrics
+    enabled: true
+    hosts:
+      - "postgres://boutique_user:${POSTGRES_PASSWORD}@postgres.assessment.local:5432/boutique_metadata?sslmode=disable"
+    period: 30s
+    data_stream:
+      namespace: default
+    metricsets:
+      - database           # database size, connections
+      - bgwriter             # buffer writes, checkpoints
+      - activity             # active connections, waiting queries
+      - statement            # pg_stat_statements: slow queries, tuple ops
+
+  - type: filestream
+    enabled: true
+    streams:
+      - id: postgresql-slow-log
+        enabled: true
+        data_stream:
+          dataset: postgresql.log
+        paths:
+          - /var/log/postgresql/postgresql-15-main.log
+        parsers:
+          - multiline:
+              type: pattern
+              pattern: '^\d{4}-\d{2}-\d{2}'
+        processors:
+          - dissect:
+              tokenizer: "%{timestamp} %{timezone} [%{pid}] %{level} %{message}"
+              field: message
+
+# PostgreSQL server configuration (postgresql.conf additions):
+#   shared_preload_libraries = 'pg_stat_statements'
+#   pg_stat_statements.track = all
+#   log_min_duration_statement = 500    # log queries > 500ms
+#   log_line_prefix = '%t [%p] %l '
+
+# Kibana Discover query — top 5 slowest queries:
+#   data_stream.dataset: postgresql.statement
+#   | STATS avg = AVG(postgresql.statement.total_time.ms) BY postgresql.statement.query
+#   | SORT avg DESC
+#   | LIMIT 5

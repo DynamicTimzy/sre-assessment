@@ -1,0 +1,11 @@
+{{/*
+  HTML template snippet — add to frontend templates/header.html
+  Requires data-rum-action attributes on interactive elements:
+    <button data-rum-action="add-to-cart" data-product-id="{{.ID}}">Add to Cart</button>
+    <button data-rum-action="checkout">Checkout</button>
+*/}}
+<script>
+  window.__APM_SERVER_URL__ = "{{ .APM_SERVER_URL | default "/apm" }}";
+  window.__DEPLOYMENT_ENV__ = "{{ .Environment | default "assessment" }}";
+</script>
+<script type="module" src="/static/js/apm-rum.js"></script>

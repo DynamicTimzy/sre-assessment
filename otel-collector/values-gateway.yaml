@@ -1,0 +1,251 @@
+# OpenTelemetry Collector — Gateway (Deployment) topology
+# Deploy: helm upgrade --install otel-gateway open-telemetry/opentelemetry-collector \
+#   -n observability -f values-gateway.yaml
+
+mode: deployment
+
+nameOverride: otel-gateway
+
+replicaCount: 2
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.96.0"
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 250m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+serviceAccount:
+  create: true
+
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "namespaces"]
+      verbs: ["get", "list", "watch"]
+
+ports:
+  otlp:
+    enabled: true
+    containerPort: 4317
+    servicePort: 4317
+    protocol: TCP
+    appProtocol: grpc
+  otlp-http:
+    enabled: true
+    containerPort: 4318
+    servicePort: 4318
+    protocol: TCP
+  metrics:
+    enabled: true
+    containerPort: 8888
+    servicePort: 8888
+    protocol: TCP
+
+extraEnvs:
+  - name: ELASTIC_APM_SECRET_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: elastic-apm-credentials
+        key: secret_token
+  - name: ELASTIC_APM_SERVER_URL
+    value: "https://apm-server.elastic-system.svc.cluster.local:8200"
+
+extraVolumes:
+  - name: sampling-config
+    configMap:
+      name: otel-tail-sampling-policy
+
+extraVolumeMounts:
+  - name: sampling-config
+    mountPath: /etc/otel/sampling-policy.yaml
+    subPath: sampling-policy.yaml
+    readOnly: true
+
+config:
+  extensions:
+    health_check:
+      endpoint: 0.0.0.0:13133
+    zpages:
+      endpoint: 0.0.0.0:55679
+    memory_ballast:
+      size_mib: 330
+    file_storage:
+      directory: /var/lib/otel/file_storage
+      create_directory: true
+
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+          max_recv_msg_size_mib: 16
+        http:
+          endpoint: 0.0.0.0:4318
+
+    zipkin:
+      endpoint: 0.0.0.0:9411
+
+  processors:
+    memory_limiter:
+      check_interval: 1s
+      limit_percentage: 80
+      spike_limit_percentage: 20
+
+    resourcedetection:
+      detectors: [env, system, k8snode]
+      timeout: 5s
+      override: false
+
+    k8sattributes:
+      auth_type: serviceAccount
+      passthrough: false
+      extract:
+        metadata:
+          - k8s.namespace.name
+          - k8s.pod.name
+          - k8s.deployment.name
+          - k8s.node.name
+        labels:
+          - tag_name: service.name
+            key: app.kubernetes.io/name
+            from: pod
+
+    resource:
+      attributes:
+        - key: collector.role
+          value: gateway
+          action: upsert
+        - key: deployment.environment
+          value: assessment
+          action: upsert
+
+    # Tail-based sampling — policy defined in sampling-policy.yaml ConfigMap
+    tail_sampling:
+      decision_wait: 10s
+      num_traces: 100000
+      expected_new_traces_per_sec: 1000
+      policies:
+        # Policy 1: Always sample errors (HTTP 5xx or span ERROR status)
+        - name: errors-policy
+          type: status_code
+          status_code:
+            status_codes: [ERROR]
+        # Policy 2: Always sample slow traces (>2s latency)
+        - name: latency-policy
+          type: latency
+          latency:
+            threshold_ms: 2000
+        # Policy 3: Sample 10% of remaining successful traces
+        - name: probabilistic-policy
+          type: probabilistic
+          probabilistic:
+            sampling_percentage: 10
+        # Policy 4: Always sample checkout/payment transactions
+        - name: checkout-policy
+          type: string_attribute
+          string_attribute:
+            key: transaction.type
+            values: [checkout, payment]
+            enabled_regex_matching: false
+            invert_match: false
+
+    batch:
+      send_batch_size: 16384
+      timeout: 10s
+      send_batch_max_size: 32768
+
+    # Drop health-check noise before export
+    filter/healthchecks:
+      traces:
+        span:
+          - 'attributes["http.target"] == "/health" or attributes["http.target"] == "/healthz"'
+
+  exporters:
+    # Elastic APM Server OTLP intake
+    otlp/elastic:
+      endpoint: ${env:ELASTIC_APM_SERVER_URL}
+      headers:
+        Authorization: "Bearer ${env:ELASTIC_APM_SECRET_TOKEN}"
+      tls:
+        insecure: false
+        insecure_skip_verify: true  # Use proper CA in production
+      compression: gzip
+      sending_queue:
+        enabled: true
+        num_consumers: 8
+        queue_size: 5000
+      retry_on_failure:
+        enabled: true
+        initial_interval: 5s
+        max_interval: 60s
+        max_elapsed_time: 600s
+
+    # Debug exporter (disable in production)
+    # logging:
+    #   verbosity: basic
+
+    prometheus:
+      endpoint: 0.0.0.0:8889
+      namespace: otelcol_gateway
+
+  service:
+    extensions: [health_check, zpages, memory_ballast, file_storage]
+    telemetry:
+      logs:
+        level: info
+      metrics:
+        level: detailed
+        address: 0.0.0.0:8888
+    pipelines:
+      traces:
+        receivers: [otlp, zipkin]
+        processors:
+          - memory_limiter
+          - k8sattributes
+          - resourcedetection
+          - resource
+          - filter/healthchecks
+          - tail_sampling
+          - batch
+        exporters: [otlp/elastic]
+      metrics:
+        receivers: [otlp]
+        processors:
+          - memory_limiter
+          - k8sattributes
+          - resourcedetection
+          - resource
+          - batch
+        exporters: [otlp/elastic]
+      logs:
+        receivers: [otlp]
+        processors:
+          - memory_limiter
+          - k8sattributes
+          - resourcedetection
+          - resource
+          - batch
+        exporters: [otlp/elastic]
+
+serviceMonitor:
+  enabled: true
+  metricsEndpoints:
+    - port: metrics
+      interval: 15s
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

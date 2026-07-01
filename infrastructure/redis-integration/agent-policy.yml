@@ -1,0 +1,34 @@
+# Redis Integration — Elastic Agent
+# Targets the Redis 7 cluster used by cartservice
+
+inputs:
+  - type: redis/metrics
+    enabled: true
+    hosts:
+      - "redis.assessment.local:6379"
+    password: "${REDIS_PASSWORD}"
+    period: 10s
+    metricsets:
+      - info               # connected_clients, used_memory, maxmemory, evicted_keys
+      - key                # keys per database
+      - keyspace           # hits/misses ratio per DB
+
+  - type: redis/slowlog
+    enabled: true
+    hosts:
+      - "redis.assessment.local:6379"
+    password: "${REDIS_PASSWORD}"
+    period: 10s
+
+# Key metrics collected:
+#   - redis.info.clients.connected
+#   - redis.info.memory.used_memory
+#   - redis.info.stats.evicted_keys
+#   - redis.info.stats.keyspace_hits / keyspace_misses
+#   - redis.slowlog.duration.us
+#   - redis.slowlog.command
+
+# Kibana Discover query — slow Redis commands:
+#   data_stream.dataset: redis.slowlog
+#   | SORT redis.slowlog.duration.us DESC
+#   | LIMIT 20

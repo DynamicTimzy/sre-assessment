@@ -1,0 +1,43 @@
+# Tail-based sampling policy for OTel Gateway Collector
+# Applied as a ConfigMap and referenced by values-gateway.yaml
+#
+# Rationale:
+# - Errors and slow traces are always retained for debugging
+# - Checkout/payment flows are business-critical and always sampled
+# - Successful routine traffic is probabilistically sampled at 10% to control costs
+# - decision_wait of 10s allows late-arriving spans from async operations to be evaluated
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-tail-sampling-policy
+  namespace: observability
+  labels:
+    app.kubernetes.io/name: otel-gateway
+    app.kubernetes.io/component: sampling-policy
+data:
+  sampling-policy.yaml: |
+    # Documented sampling policy for audit/review purposes.
+    # The active policy is embedded in values-gateway.yaml tail_sampling processor.
+    #
+    # Priority order (first match wins in OTel tail_sampling):
+    #   1. errors-policy      → 100% of spans with status ERROR
+    #   2. latency-policy     → 100% of traces with any span > 2000ms
+    #   3. checkout-policy    → 100% of traces tagged transaction.type=checkout|payment
+    #   4. probabilistic-policy → 10% of all remaining traces
+    #
+  policy-summary.md: |
+    ## Tail-Based Sampling Policy
+
+    | Policy | Type | Threshold | Sample Rate | Rationale |
+    |--------|------|-----------|-------------|-----------|
+    | errors-policy | status_code | ERROR | 100% | Debug production incidents |
+    | latency-policy | latency | >2000ms | 100% | Identify performance regressions |
+    | checkout-policy | string_attribute | transaction.type in [checkout, payment] | 100% | Business-critical revenue path |
+    | probabilistic-policy | probabilistic | — | 10% | Cost control for routine traffic |
+
+    ### Operational Notes
+    - `decision_wait: 10s` — waits for all spans in a trace before deciding
+    - `num_traces: 100000` — in-memory trace buffer size per gateway pod
+    - Adjust probabilistic percentage based on daily ingest volume and Elastic license tier
+    - Monitor `otelcol_processor_tail_sampling_*` metrics for dropped vs sampled counts

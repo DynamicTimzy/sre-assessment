@@ -1,0 +1,32 @@
+# Kubernetes deployment patch for paymentservice OTel environment variables
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paymentservice
+  namespace: boutique
+spec:
+  template:
+    spec:
+      containers:
+        - name: server
+          env:
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(HOST_IP):4317"
+            - name: OTEL_SERVICE_NAME
+              value: paymentservice
+            - name: OTEL_SERVICE_VERSION
+              value: "v0.3.9"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "deployment.environment=assessment"
+            - name: NODE_OPTIONS
+              value: "--require ./telemetry.js"
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_METRICS_EXPORTER
+              value: otlp
+            - name: OTEL_PROPAGATORS
+              value: tracecontext,baggage

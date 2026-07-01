@@ -1,0 +1,224 @@
+# OpenTelemetry Collector — DaemonSet (Agent) topology
+# Deploy: helm upgrade --install otel-agent open-telemetry/opentelemetry-collector \
+#   -n observability --create-namespace -f values-agent.yaml
+
+mode: daemonset
+
+nameOverride: otel-agent
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.96.0"
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+serviceAccount:
+  create: true
+
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "namespaces", "nodes"]
+      verbs: ["get", "list", "watch"]
+
+ports:
+  otlp:
+    enabled: true
+    containerPort: 4317
+    servicePort: 4317
+    protocol: TCP
+    appProtocol: grpc
+  otlp-http:
+    enabled: true
+    containerPort: 4318
+    servicePort: 4318
+    protocol: TCP
+  zipkin:
+    enabled: true
+    containerPort: 9411
+    servicePort: 9411
+    protocol: TCP
+  metrics:
+    enabled: true
+    containerPort: 8888
+    servicePort: 8888
+    protocol: TCP
+
+# Host network allows pods to reach agent via status.hostIP
+hostNetwork: false
+
+extraEnvs:
+  - name: K8S_NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
+  - name: K8S_POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP
+  - name: ELASTIC_APM_SECRET_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: elastic-apm-credentials
+        key: secret_token
+        optional: true
+
+config:
+  extensions:
+    health_check:
+      endpoint: 0.0.0.0:13133
+    zpages:
+      endpoint: 0.0.0.0:55679
+    memory_ballast:
+      size_mib: 165
+
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+          cors:
+            allowed_origins:
+              - "http://*"
+              - "https://*"
+
+    zipkin:
+      endpoint: 0.0.0.0:9411
+
+    hostmetrics:
+      collection_interval: 30s
+      scrapers:
+        cpu:
+          metrics:
+            system.cpu.utilization:
+              enabled: true
+        memory:
+          metrics:
+            system.memory.utilization:
+              enabled: true
+        disk:
+        filesystem:
+          metrics:
+            system.filesystem.utilization:
+              enabled: true
+        load:
+        network:
+        paging:
+        processes:
+
+  processors:
+    memory_limiter:
+      check_interval: 1s
+      limit_percentage: 75
+      spike_limit_percentage: 15
+
+    resourcedetection:
+      detectors: [env, system, docker, k8snode]
+      timeout: 5s
+      override: false
+      k8snode:
+        node_from_env_var: K8S_NODE_NAME
+
+    resource:
+      attributes:
+        - key: collector.role
+          value: agent
+          action: upsert
+        - key: k8s.node.name
+          value: ${env:K8S_NODE_NAME}
+          action: upsert
+
+    k8sattributes:
+      auth_type: serviceAccount
+      passthrough: false
+      extract:
+        metadata:
+          - k8s.namespace.name
+          - k8s.pod.name
+          - k8s.pod.uid
+          - k8s.deployment.name
+          - k8s.statefulset.name
+          - k8s.daemonset.name
+          - k8s.node.name
+          - k8s.pod.start_time
+        labels:
+          - tag_name: app.label.component
+            key: app.kubernetes.io/component
+            from: pod
+          - tag_name: app.label.name
+            key: app.kubernetes.io/name
+            from: pod
+      pod_association:
+        - sources:
+            - from: resource_attribute
+              name: k8s.pod.ip
+        - sources:
+            - from: resource_attribute
+              name: k8s.pod.uid
+        - sources:
+            - from: connection
+
+    batch:
+      send_batch_size: 8192
+      timeout: 5s
+      send_batch_max_size: 16384
+
+  exporters:
+    # Forward all signals to the central gateway collector
+    otlp/gateway:
+      endpoint: otel-gateway-collector.observability.svc.cluster.local:4317
+      tls:
+        insecure: true
+      sending_queue:
+        enabled: true
+        num_consumers: 4
+        queue_size: 1000
+      retry_on_failure:
+        enabled: true
+        initial_interval: 5s
+        max_interval: 30s
+        max_elapsed_time: 300s
+
+    # Self-monitoring metrics
+    prometheus:
+      endpoint: 0.0.0.0:8889
+      namespace: otelcol_agent
+
+  service:
+    extensions: [health_check, zpages, memory_ballast]
+    telemetry:
+      logs:
+        level: info
+      metrics:
+        level: detailed
+        address: 0.0.0.0:8888
+    pipelines:
+      traces:
+        receivers: [otlp, zipkin]
+        processors: [memory_limiter, k8sattributes, resourcedetection, resource, batch]
+        exporters: [otlp/gateway]
+      metrics:
+        receivers: [otlp, hostmetrics]
+        processors: [memory_limiter, k8sattributes, resourcedetection, resource, batch]
+        exporters: [otlp/gateway]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, k8sattributes, resourcedetection, resource, batch]
+        exporters: [otlp/gateway]
+
+serviceMonitor:
+  enabled: true
+  metricsEndpoints:
+    - port: metrics
+      interval: 30s
+    - port: 8889
+      interval: 30s

@@ -1,0 +1,37 @@
+{{/*
+  Helm values snippet for APM Server RUM/CORS configuration.
+  Apply to elastic/apm-server Helm chart or ECK APM Server resource.
+*/}}
+apmConfig:
+  apm-server:
+    rum:
+      enabled: true
+      allow_origins:
+        - "http://localhost:*"
+        - "https://boutique.assessment.local"
+        - "https://*.boutique.assessment.local"
+      allow_headers:
+        - Content-Type
+        - Authorization
+        - traceparent
+        - tracestate
+      source_mapping:
+        enabled: true
+        cache:
+          expiration: 5m
+    auth:
+      secret_token: "${ELASTIC_APM_SECRET_TOKEN}"
+    kibana:
+      enabled: true
+      host: "http://kibana-kb-http.elastic-system.svc.cluster.local:5601"
+
+# Frontend ingress annotation to proxy RUM requests to APM Server
+# This avoids CORS issues by serving RUM intake on the same origin
+ingress:
+  annotations:
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      location /apm/ {
+        proxy_pass https://apm-server.elastic-system.svc.cluster.local:8200/;
+        proxy_set_header Authorization "Bearer ${ELASTIC_APM_SECRET_TOKEN}";
+        proxy_ssl_verify off;
+      }

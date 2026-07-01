@@ -1,0 +1,14 @@
+{
+  "name": "paymentservice-otel-deps",
+  "description": "Add these dependencies to paymentservice package.json",
+  "dependencies": {
+    "@opentelemetry/api": "^1.8.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.46.0",
+    "@opentelemetry/exporter-metrics-otlp-grpc": "^0.51.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.51.0",
+    "@opentelemetry/resources": "^1.24.0",
+    "@opentelemetry/sdk-metrics": "^1.24.0",
+    "@opentelemetry/sdk-node": "^0.51.0",
+    "@opentelemetry/semantic-conventions": "^1.24.0"
+  }
+}
