@@ -195,11 +195,30 @@ environment. Production deployments should mount the cluster CA certificate.
 
 ## Open Items / Known Gaps
 
-1. **checkoutservice** not instrumented — traces will show a gap between frontend and
-   paymentservice. Fix: add Go OTel instrumentation to checkoutservice.
-2. **emailservice** (Ruby) not instrumented — async email send span missing from checkout
-   trace. Fix: add `elastic-apm` gem or OTel Ruby SDK.
-3. **SSL certificate expiry alert** for NGINX requires cert-manager metrics or custom
-   script — not included in standard NGINX ingress metrics.
-4. **Elastic ML anomaly detection** on error rates requires Platinum license — dashboard
-   uses threshold-based alerting as fallback.
+1. ~~**checkoutservice** not instrumented~~ — **Resolved.** Go OTel instrumentation
+   added in `instrumentation/checkoutservice/` (gRPC server + client stats handlers,
+   `prepare-order-items` / `charge-and-ship` custom spans, `checkout.orders.placed`
+   counter and `checkout.order.value` histogram). This closes the frontend↔payment gap.
+2. ~~**frontend** custom metrics never exported~~ — **Resolved.** The `MeterProvider`
+   originally had no reader; an OTLP metric exporter with a 15s `PeriodicReader` is now
+   attached in `instrumentation/frontend/otel_instrumentation.go`.
+3. ~~**SSL certificate expiry alert** for NGINX~~ — **Resolved.** Added an Uptime TLS
+   certificate rule (`xpack.uptime.alerts.tlsCertificate`, 14-day threshold) plus an
+   SSL handshake error threshold rule in `infrastructure/alerting-rules/all-rules.ndjson`.
+   The TLS rule requires a Heartbeat/Synthetics monitor on the ingress endpoint.
+4. **emailservice** (Ruby) not instrumented — async email send span still appears only
+   as an auto-instrumented gRPC child of `charge-and-ship`. Fix: add
+   `opentelemetry-ruby` for custom send-status span events.
+5. **Elastic ML anomaly detection** on error rates requires Platinum license — the
+   Service Health dashboard uses a threshold reference line (5%) on the error-rate
+   trend and threshold-based alerting as the fallback.
+
+## Addendum: Dashboard packaging
+
+Each dashboard NDJSON is exported **self-contained** — it bundles the data-view
+(index-pattern) saved objects it references (`traces-apm-default`, `metrics-apm-default`,
+`traces-apm-rum-default`, `logs-network-flow`, `logs-nginx-access`) and links every panel
+to its visualization via the dashboard `references` array. This makes re-import
+idempotent (`?overwrite=true`) with no manual data-view creation. A fourth dashboard,
+`infrastructure.ndjson`, covers network-security denied connections (3.3) and NGINX
+load-balancer vs backend APM latency correlation (3.4).

@@ -1,0 +1,36 @@
+# Kubernetes deployment patch for checkoutservice OTel environment variables
+# Apply: kubectl patch deployment checkoutservice -n boutique --patch-file k8s-patch.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkoutservice
+  namespace: boutique
+spec:
+  template:
+    spec:
+      containers:
+        - name: server
+          env:
+            # OTLP exporter → local DaemonSet agent via node hostIP
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(HOST_IP):4317"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: grpc
+            - name: OTEL_SERVICE_NAME
+              value: checkoutservice
+            - name: OTEL_SERVICE_VERSION
+              value: "v0.3.9"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "deployment.environment=assessment,service.namespace=boutique"
+            - name: OTEL_PROPAGATORS
+              value: "tracecontext,baggage"
+            - name: OTEL_TRACES_SAMPLER
+              value: parentbased_always_on
+            - name: OTEL_METRICS_EXPORTER
+              value: otlp
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp

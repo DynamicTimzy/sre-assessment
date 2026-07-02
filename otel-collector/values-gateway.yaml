@@ -148,12 +148,7 @@ config:
           type: latency
           latency:
             threshold_ms: 2000
-        # Policy 3: Sample 10% of remaining successful traces
-        - name: probabilistic-policy
-          type: probabilistic
-          probabilistic:
-            sampling_percentage: 10
-        # Policy 4: Always sample checkout/payment transactions
+        # Policy 3: Always sample checkout/payment transactions (business-critical)
         - name: checkout-policy
           type: string_attribute
           string_attribute:
@@ -161,6 +156,11 @@ config:
             values: [checkout, payment]
             enabled_regex_matching: false
             invert_match: false
+        # Policy 4: Sample 10% of all remaining traces (OR-combined with the above)
+        - name: probabilistic-policy
+          type: probabilistic
+          probabilistic:
+            sampling_percentage: 10
 
     batch:
       send_batch_size: 16384

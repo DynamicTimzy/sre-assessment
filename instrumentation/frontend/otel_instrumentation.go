@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
@@ -89,8 +90,22 @@ func initTelemetry(ctx context.Context) (func(context.Context) error, error) {
 		propagation.Baggage{},
 	))
 
+	// Metric exporter → same DaemonSet agent OTLP endpoint as traces.
+	// Without an attached reader/exporter the MeterProvider drops all metrics,
+	// so frontend.page.views would never reach Elasticsearch.
+	metricExporter, err := otlpmetricgrpc.New(ctx,
+		otlpmetricgrpc.WithEndpoint(otlpEndpoint),
+		otlpmetricgrpc.WithInsecure(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("metric exporter: %w", err)
+	}
+
 	meterProvider := sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter,
+			sdkmetric.WithInterval(15*time.Second),
+		)),
 	)
 	otel.SetMeterProvider(meterProvider)
 
@@ -103,7 +118,18 @@ func initTelemetry(ctx context.Context) (func(context.Context) error, error) {
 		return nil, fmt.Errorf("counter: %w", err)
 	}
 
-	return tp.Shutdown, nil
+	shutdown := func(ctx context.Context) error {
+		var errs error
+		if err := tp.Shutdown(ctx); err != nil {
+			errs = fmt.Errorf("tracer provider shutdown: %w", err)
+		}
+		if err := meterProvider.Shutdown(ctx); err != nil {
+			errs = fmt.Errorf("meter provider shutdown: %w", err)
+		}
+		return errs
+	}
+
+	return shutdown, nil
 }
 
 // renderProductPage wraps template rendering with a custom span
